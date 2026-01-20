@@ -49,7 +49,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     active_sessions[session_id]["status"] = "active"
 
     try:
-        await run_bot(websocket)    
+        await run_bot(websocket, session_id)    
     except WebSocketDisconnect:
         logger.info(f"An error occured {WebSocketDisconnect}")
     except Exception as e:

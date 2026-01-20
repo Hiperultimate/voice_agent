@@ -1,1 +1,7 @@
-- To run the project run `uv run main.py`
+## Setup
+- `uv sync`
+
+## Start
+In terminal
+- `cd server`
+- `uv run main.py`
