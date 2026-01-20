@@ -1,0 +1,1 @@
+- To run the project run `uv run main.py`
