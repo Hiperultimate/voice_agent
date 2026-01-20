@@ -1,7 +1,8 @@
+import uuid
+import logging
+from bot import run_bot
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-import json
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,21 +17,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = await websocket.receive_text()
-            print(f"Message text was: {data}")
-            await websocket.send_text(f"Message text was: {data}")
-                
-    except WebSocketDisconnect:
-        pass
-
 @app.get("/")
 async def root():
     return {"status": "running", "message": "Agent server is active"}
+
+# Structure: { 
+#   "session_id": 
+#       { "status": "active" } >> "active" | "waiting" | "ended"
+#    }
+active_sessions = {} 
+
+@app.post("/start-session")
+async def start_session():
+    session_id = str(uuid.uuid4())
+    active_sessions[session_id] = { "status": "waiting" }
+    return {
+        "session_id": session_id,
+        "url": f"ws://localhost:8000/ws/{session_id}"
+    }
+
+
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+
+    if( session_id not in active_sessions):
+        logger.error(f"Invalid session ID attempt: {session_id}")
+        await websocket.close(code=4003) # Forbidden
+        return
+
+    await websocket.accept()
+    active_sessions[session_id]["status"] = "active"
+
+    try:
+        await run_bot(websocket)    
+    except WebSocketDisconnect:
+        logger.info(f"An error occured {WebSocketDisconnect}")
+    except Exception as e:
+        logger.error(f"Error in session {session_id}: {e}")
+    finally:
+        # Cleanup
+        if session_id in active_sessions:
+            del active_sessions[session_id]
+        logger.info(f"Session closed: {session_id}")
+
 
 if __name__ == "__main__":
     import uvicorn
