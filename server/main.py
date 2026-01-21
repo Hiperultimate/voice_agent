@@ -2,6 +2,7 @@ import uuid
 import logging
 from bot import run_bot
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +36,13 @@ async def start_session():
         "session_id": session_id,
         "url": f"ws://localhost:8000/ws/{session_id}"
     }
+
+@app.get("/session/{session_id}/data")
+async def get_session_data(session_id: str):
+    try:
+        return FileResponse(f"data/{session_id}.json")
+    except RuntimeError:
+        return {"error": "File not found"}
 
 
 @app.websocket("/ws/{session_id}")

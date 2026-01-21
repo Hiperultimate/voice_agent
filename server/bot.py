@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+import json
 
 # Pipecat imports
 from pipecat.pipeline.pipeline import Pipeline
@@ -7,7 +9,8 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
-
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.frames.frames import (Frame, TranscriptionFrame, TextFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterimTranscriptionFrame)
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.llm import GoogleLLMService
@@ -26,6 +29,91 @@ load_dotenv()
 logger.remove()
 logger.add(sys.stderr, level="DEBUG")
 
+class SessionData:
+    """Holds the data shared between the UserRecorder and BotRecorder."""
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.turns = []
+
+    def save_json(self):
+        # later on we can change this code to save transcription inside a DB as jsonb or as blob in s3
+        os.makedirs("data", exist_ok=True)
+        file_path = f"data/{self.session_id}.json"
+        try:
+            with open(file_path, "w") as f:
+                json.dump({"session_id": self.session_id, "turns": self.turns}, f, indent=2)
+            logger.info(f"Transcript saved to {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save JSON: {e}")
+
+class UserRecorder(FrameProcessor):
+    def __init__(self, data: SessionData):
+        super().__init__()
+        self.data = data
+        self._user_buffer = []
+        self._start_time = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        now = time.time()
+
+        if isinstance(frame, UserStartedSpeakingFrame):
+            self._user_buffer = []
+            self._start_time = now
+            
+        elif isinstance(frame, TranscriptionFrame):
+            text = frame.text.strip()
+            if text:
+                self._user_buffer.append(text)
+
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            if self._user_buffer:
+                full_text = " ".join(self._user_buffer).strip()
+                if full_text:
+                    logger.info(f"User Turn: {full_text}")
+                    self.data.turns.append({
+                        "role": "user",
+                        "text": full_text,
+                        "timestamp": self._start_time or now
+                    })
+            self._user_buffer = []
+
+        await self.push_frame(frame, direction)
+
+class BotRecorder(FrameProcessor):
+    def __init__(self, data: SessionData):
+        super().__init__()
+        self.data = data
+        self._bot_buffer = []
+        self._start_time = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        now = time.time()
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._bot_buffer = []
+            self._start_time = now
+
+        elif isinstance(frame, TextFrame):
+            self._bot_buffer.append(frame.text)
+
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            if self._bot_buffer:
+                full_text = "".join(self._bot_buffer).strip()
+                if full_text:
+                    logger.info(f"Bot Turn: {full_text}")
+                    self.data.turns.append({
+                        "role": "bot",
+                        "text": full_text,
+                        "timestamp": self._start_time or now
+                    })
+            self._bot_buffer = []
+
+        await self.push_frame(frame, direction)
+
 async def run_bot(websocket_client, session_id):
     logger.info(f"Starting bot for session: {session_id}")
 
@@ -35,7 +123,6 @@ async def run_bot(websocket_client, session_id):
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(),
             vad_audio_passthrough=True,
             serializer=ProtobufFrameSerializer(),
@@ -61,13 +148,18 @@ async def run_bot(websocket_client, session_id):
     ]
     context = LLMContext(messages)
     context_aggregator = LLMContextAggregatorPair(context)
+    session_data = SessionData(session_id)
+    user_recorder = UserRecorder(session_data)
+    bot_recorder = BotRecorder(session_data)
 
     pipeline = Pipeline(
         [
             transport.input(),           # In from Mic
             stt,                         # Speech -> Text
+            user_recorder,               # Saves user sst text
             context_aggregator.user(),   # Log User Text
             llm,                         # Text -> Text | Generating reply
+            bot_recorder,                # Saves bot tts text
             tts,                         # Text -> Audio
             transport.output(),          # Out to Speaker
             context_aggregator.assistant(), # Log Bot Text
@@ -81,5 +173,17 @@ async def run_bot(websocket_client, session_id):
         ),
     )
 
+    @transport.event_handler("on_client_disconnected")
+    async def on_client_disconnected(transport, client):
+        logger.info(f"Client disconnected session {session_id}. Killing pipeline.")
+        await task.cancel()
+
     runner = PipelineRunner()
-    await runner.run(task)
+
+    try:
+        await runner.run(task)
+    except Exception as e:
+        logger.error(f"Pipeline error: {e}")
+    finally:
+        logger.info("Session ended. Saving data immediately.")
+        session_data.save_json()
