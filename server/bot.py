@@ -10,7 +10,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.frames.frames import (Frame, TranscriptionFrame, TextFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, BotStartedSpeakingFrame)
+from pipecat.frames.frames import (Frame, TranscriptionFrame, TextFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame)
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.llm import GoogleLLMService
@@ -122,10 +122,12 @@ class BotRecorder(FrameProcessor):
                     max(0, (self.data.t2_transcript - self.data.t1_user_stop) * 1000)
                 )
                 llm_latency_ms = round((now - self.data.t2_transcript) * 1000)
+
+                latency_start_time = self.data.t1_user_stop if self.data.t1_user_stop > 0 else now
                 
                 self.data.turns.append({
                     "role": "latency",
-                    "start" : now, 
+                    "start" : latency_start_time, 
                     "end" : 0,
                     "metadata": {
                         "stt": stt_latency_ms,
@@ -157,20 +159,31 @@ class TTSRecorder(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
+        now = time.time()
         if isinstance(frame, BotStartedSpeakingFrame):
-            now = time.time()
 
-            # have to do this dance to fix a order bug in turns
-            latency_turn = next(
-                (t for t in reversed(self.data.turns) if t["role"] == "latency"),
-                None
-            )
+            if len(self.data.turns) >= 2:
+                bot_turn = self.data.turns[-1]
+                latency_turn = self.data.turns[-2]
 
-            if latency_turn and self.data.t3_llm_start > 0:
-                latency_turn.setdefault("metadata", {})
-                latency_turn["metadata"]["tts"] = round(
-                    max(0, (now - self.data.t3_llm_start) * 1000)
-                )
+                if bot_turn["role"] == "bot" and latency_turn["role"] == "latency":
+                    
+                    # Calculate TTS Latency
+                    if self.data.t3_llm_start > 0:
+                        tts_latency = now - self.data.t3_llm_start
+                        
+                        # Store it in the latency turn metadata
+                        latency_turn.setdefault("metadata", {})
+                        latency_turn["metadata"]["tts"] = round(max(0, tts_latency * 1000))
+
+                    # Update the Green Box to start exactly when sound starts
+                    bot_turn["start"] = now
+
+        if isinstance(frame, BotStoppedSpeakingFrame):
+            if self.data.turns:
+                last_turn = self.data.turns[-1]
+                if last_turn["role"] == "bot":
+                    last_turn["end"] = now
 
         await self.push_frame(frame, direction)
 
