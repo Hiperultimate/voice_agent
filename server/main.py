@@ -1,5 +1,6 @@
 import uuid
 import logging
+import os
 from bot import run_bot
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -43,6 +44,13 @@ async def get_session_data(session_id: str):
         return FileResponse(f"data/{session_id}.json")
     except RuntimeError:
         return {"error": "File not found"}
+    
+@app.api_route("/session/{session_id}/audio", methods=["GET", "HEAD"])
+async def get_audio(session_id: str):
+    file_path = f"data/{session_id}.wav"
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="audio/wav")
+    return {"error": "Audio file not found"}, 404
 
 
 @app.websocket("/ws/{session_id}")
@@ -57,7 +65,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     active_sessions[session_id]["status"] = "active"
 
     try:
-        await run_bot(websocket, session_id)    
+        await run_bot(websocket, session_id)
     except WebSocketDisconnect:
         logger.info(f"An error occured {WebSocketDisconnect}")
     except Exception as e:

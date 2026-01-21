@@ -37,6 +37,7 @@ class SessionData:
         self.session_id = session_id
         self.turns = []
 
+        self.audio_start_time = 0.0
         self.start_time = time.time() 
 
         self.t1_user_stop = 0.0     
@@ -52,6 +53,7 @@ class SessionData:
                 json.dump({
                     "session_id": self.session_id,
                     "start_time": self.start_time, 
+                    "audio_start_time": self.audio_start_time,
                     "turns": self.turns
                     }, f, indent=2 )
             logger.info(f"Transcript saved to {file_path}")
@@ -234,6 +236,7 @@ async def run_bot(websocket_client, session_id):
         num_channels=1,               # 1 for mono, 2 for stereo (user left, bot right)
         enable_turn_audio=False,      # Enable per-turn audio recording
         user_continuous_stream=False,  # User has continuous audio stream
+        buffer_size=5 * 1024 * 1024
     )
 
     session_data = SessionData(session_id)
@@ -266,6 +269,7 @@ async def run_bot(websocket_client, session_id):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
+        session_data.audio_start_time = time.time()
         logger.info(f"Client connected")
         await audiobuffer.start_recording()
     
