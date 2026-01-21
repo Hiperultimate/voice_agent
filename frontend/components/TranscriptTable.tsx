@@ -2,96 +2,97 @@
 
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { User, Bot, Clock } from 'lucide-react';
-import { SessionStateProps } from '@/types';
+import { User, Bot, Loader2 } from 'lucide-react';
+import { BackendTurn, SessionStateProps } from '@/types';
+import { formatTime } from '@/helperFns/formatTime';
 
-interface Turn {
-  role: 'user' | 'bot';
-  text: string;
-  timestamp: number;
-  latency_ms?: number; // Optional for now
-}
+export default function TranscriptTable({ sessionId }: SessionStateProps) {
+  const [turns, setTurns] = useState<BackendTurn[]>([]);
+  const [status, setStatus] = useState<'loading' | 'error' | 'success'>('loading');
 
-export default function TranscriptTable(
-    {
-      sessionId,
-      setSessionId,
-    }: SessionStateProps
-) {
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [loading, setLoading] = useState(true);
-
+  // Polling for transcript
   useEffect(() => {
-    // Fetch the JSON file from the backend
-    if(!sessionId){
-        return
-    }
-    axios.get(`http://localhost:8000/session/${sessionId}/data`)
-      .then(res => {
+    if (!sessionId) return;
+
+    let attempts = 0;
+    const maxAttempts = 10;
+    let timeoutId: NodeJS.Timeout;
+
+    const fetchTranscript = async () => {
+      try {
+        const res = await axios.get(`http://localhost:8000/session/${sessionId}/data`);
         setTurns(res.data.turns || []);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error("Failed to load transcript", err);
-        setLoading(false);
-      });
+        setStatus('success');
+      } catch (err) {
+        attempts++;
+        if (attempts < maxAttempts) {
+          timeoutId = setTimeout(fetchTranscript, 1000);
+        } else {
+          setStatus('error');
+        }
+      }
+    };
+
+    setStatus('loading');
+    fetchTranscript();
+
+    return () => clearTimeout(timeoutId);
   }, [sessionId]);
 
-  if (loading) return <div className="text-center p-4">Loading transcript...</div>;
+  // Calculate the Session Start Time (First turn timestamp)
+  const sessionStartTime = turns.length > 0 ? turns[0].start : 0;
+
+  if (status === 'loading') return <div className="text-center p-4"><Loader2 className="animate-spin inline mr-2"/>Generating transcript...</div>;
+  if (status === 'error') return <div className="text-center p-4 text-red-500">Transcript not found.</div>;
 
   return (
-    <div className="w-full max-w-2xl bg-white rounded-xl shadow-sm border overflow-hidden mt-6">
-      {/* Header */}
-      <div className="bg-gray-50 px-6 py-3 border-b flex justify-between items-center">
-        <h3 className="font-semibold text-gray-700">Turns</h3>
-        <span className="text-xs text-gray-400 uppercase tracking-wider">Session: {sessionId.slice(0,6)}</span>
-      </div>
-
-      {/* Table Header */}
-      <div className="grid grid-cols-12 gap-4 px-6 py-2 bg-gray-50 border-b text-xs font-medium text-gray-500 uppercase">
-        <div className="col-span-2">Speaker</div>
-        <div className="col-span-8">Text</div>
-        <div className="col-span-2 text-right">Latency</div>
-      </div>
-
-      {/* Table Body */}
+    <div className="w-full max-w-3xl bg-white rounded-xl shadow-sm border overflow-hidden mt-6">
+      {/* ... Header and Table Header (Keep as is) ... */}
       <div className="divide-y divide-gray-100">
-        {turns.length === 0 ? (
-          <div className="p-6 text-center text-gray-500">No transcript available.</div>
-        ) : (
-          turns.map((turn, index) => (
+        {turns.map((turn, index) => {
+          
+          // Calculate Relative Time
+          const relativeStart = turn.start - sessionStartTime;
+          const relativeEnd = turn.end > 0 ? (turn.end - sessionStartTime) : relativeStart;
+
+          if (turn.role === 'latency') {
+             return (
+                <div key={index} className="grid grid-cols-12 gap-4 px-6 py-2 bg-orange-50/30">
+                  <div className="col-span-2"></div>
+                  <div className="col-span-7 text-xs text-orange-400 flex items-center gap-2">
+                    <span className="w-1 h-1 rounded-full bg-orange-400"></span>
+                    Processing...
+                  </div>
+                  <div className="col-span-3 text-right flex justify-end gap-3 text-[10px] font-mono text-gray-500">
+                     <span title="Speech to Text">STT: {turn.metadata?.stt}ms</span>
+                     <span title="LLM Generation">LLM: {turn.metadata?.llm}ms</span>
+                     <span title="Text to Speech">TTS: {turn.metadata?.tts}ms</span>
+                  </div>
+                </div>
+              );
+          }
+
+          const isUser = turn.role === 'user';
+          return (
             <div key={index} className="grid grid-cols-12 gap-4 px-6 py-4 hover:bg-gray-50 transition-colors">
-              
-              {/* Column 1: Speaker */}
               <div className="col-span-2 flex items-center gap-2">
-                {turn.role === 'user' ? (
-                  <div className="p-1.5 bg-blue-100 text-blue-600 rounded-full">
-                    <User size={14} />
-                  </div>
-                ) : (
-                  <div className="p-1.5 bg-green-100 text-green-600 rounded-full">
-                    <Bot size={14} />
-                  </div>
-                )}
+                <div className={`p-1.5 rounded-full ${isUser ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
+                  {isUser ? <User size={14} /> : <Bot size={14} />}
+                </div>
                 <span className="text-sm font-medium capitalize text-gray-700">{turn.role}</span>
               </div>
 
-              {/* Column 2: Text */}
-              <div className="col-span-8 text-sm text-gray-600 leading-relaxed">
-                {turn.text}
+              <div className="col-span-7 text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">
+                {turn.metadata?.text || "..."}
               </div>
 
-              {/* Column 3: Latency (Placeholder for now) */}
-              <div className="col-span-2 text-right flex items-center justify-end text-xs text-gray-400 font-mono">
-                {turn.latency_ms ? (
-                  <span className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-1 rounded">
-                    <Clock size={10} /> {turn.latency_ms}ms
-                  </span>
-                ) : '-'}
+              {/* Display Relative Timestamp */}
+              <div className="col-span-3 text-right text-xs text-gray-400 font-mono flex flex-col justify-center">
+                 <span>{formatTime(relativeStart)} - {turn.end !== 0 ? formatTime(relativeEnd) : '...'}</span>
               </div>
             </div>
-          ))
-        )}
+          );
+        })}
       </div>
     </div>
   );

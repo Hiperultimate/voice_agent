@@ -14,9 +14,9 @@ import {
 } from "@pipecat-ai/websocket-transport";
 import { Mic, PhoneOff, Loader2 } from "lucide-react";
 import axios from "axios";
-import { SessionStateProps } from "@/types";
+import { ActiveCallProps } from "@/types";
 
-export default function ActiveCall({sessionId, setSessionId}: SessionStateProps) {
+export default function ActiveCall({ sessionId, setSessionId, onCallEnd }: ActiveCallProps) {
   const [client, setClient] = useState<PipecatClient | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -71,8 +71,9 @@ export default function ActiveCall({sessionId, setSessionId}: SessionStateProps)
   const endCall = useCallback(async () => {
     if (client) {
       await client.disconnect();
+      onCallEnd(); 
     }
-  }, [client]);
+  }, [client, onCallEnd]);
 
   return (
     <div className="flex flex-col items-center justify-center p-8 bg-white rounded-2xl shadow-xl border w-full max-w-sm">
