@@ -10,7 +10,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.frames.frames import (Frame, TranscriptionFrame, TextFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, InterimTranscriptionFrame)
+from pipecat.frames.frames import (Frame, TranscriptionFrame, TextFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, BotStartedSpeakingFrame)
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.llm import GoogleLLMService
@@ -34,6 +34,10 @@ class SessionData:
     def __init__(self, session_id):
         self.session_id = session_id
         self.turns = []
+
+        self.t1_user_stop = 0.0      # When did VAD say "Silence"?
+        self.t2_transcript = 0.0     # When did STT give us text?
+        self.t3_llm_start = 0.0      # When did LLM give first token?
 
     def save_json(self):
         # later on we can change this code to save transcription inside a DB as jsonb or as blob in s3
@@ -63,20 +67,24 @@ class UserRecorder(FrameProcessor):
             self._start_time = now
             
         elif isinstance(frame, TranscriptionFrame):
+            self.data.t2_transcript = now
+
             text = frame.text.strip()
             if text:
                 self._user_buffer.append(text)
 
         elif isinstance(frame, UserStoppedSpeakingFrame):
+            self.data.t1_user_stop = now
+
             if self._user_buffer:
                 full_text = " ".join(self._user_buffer).strip()
                 if full_text:
                     logger.info(f"User Turn: {full_text}")
                     self.data.turns.append({
                         "role": "user",
-                        "text": full_text,
                         "start": self._start_time or now,
-                        "end" : now
+                        "end" : now,
+                        "metadata" : {"text" : full_text}
                     })
             self._user_buffer = []
 
@@ -88,6 +96,7 @@ class BotRecorder(FrameProcessor):
         self.data = data
         self._bot_buffer = []
         self._start_time = 0
+        self._is_first_token = True
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -96,10 +105,34 @@ class BotRecorder(FrameProcessor):
 
         if isinstance(frame, LLMFullResponseStartFrame):
             self._bot_buffer = []
-            self._start_time = now
+            self._is_first_token = now
 
         elif isinstance(frame, TextFrame):
             self._bot_buffer.append(frame.text)
+
+            if ( self._is_first_token
+                    and self.data.t1_user_stop > 0
+                    and self.data.t2_transcript > 0 ):
+                self._start_time = now
+                self._is_first_token = False
+                self.data.t3_llm_start = now # Save T3
+                
+                # Calculating LLM Latency here
+                stt_latency_ms = stt_latency_ms = round(
+                    max(0, (self.data.t2_transcript - self.data.t1_user_stop) * 1000)
+                )
+                llm_latency_ms = round((now - self.data.t2_transcript) * 1000)
+                
+                self.data.turns.append({
+                    "role": "latency",
+                    "start" : now, 
+                    "end" : 0,
+                    "metadata": {
+                        "stt": stt_latency_ms,
+                        "llm": llm_latency_ms, 
+                        "tts": 0 # to be calculated later on
+                    }
+                })
 
         elif isinstance(frame, LLMFullResponseEndFrame):
             if self._bot_buffer:
@@ -108,11 +141,36 @@ class BotRecorder(FrameProcessor):
                     logger.info(f"Bot Turn: {full_text}")
                     self.data.turns.append({
                         "role": "bot",
-                        "text": full_text,
                         "start": self._start_time or now,
-                        "end": now
+                        "end": now,
+                        "metadata": {"text": full_text},
                     })
             self._bot_buffer = []
+
+        await self.push_frame(frame, direction)
+
+class TTSRecorder(FrameProcessor):
+    def __init__(self, data: SessionData):
+        super().__init__()
+        self.data = data
+    
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, BotStartedSpeakingFrame):
+            now = time.time()
+
+            # have to do this dance to fix a order bug in turns
+            latency_turn = next(
+                (t for t in reversed(self.data.turns) if t["role"] == "latency"),
+                None
+            )
+
+            if latency_turn and self.data.t3_llm_start > 0:
+                latency_turn.setdefault("metadata", {})
+                latency_turn["metadata"]["tts"] = round(
+                    max(0, (now - self.data.t3_llm_start) * 1000)
+                )
 
         await self.push_frame(frame, direction)
 
@@ -153,6 +211,7 @@ async def run_bot(websocket_client, session_id):
     session_data = SessionData(session_id)
     user_recorder = UserRecorder(session_data)
     bot_recorder = BotRecorder(session_data)
+    tts_recorder = TTSRecorder(session_data)
 
     pipeline = Pipeline(
         [
@@ -163,6 +222,7 @@ async def run_bot(websocket_client, session_id):
             llm,                         # Text -> Text | Generating reply
             bot_recorder,                # Saves bot tts text
             tts,                         # Text -> Audio
+            tts_recorder,                # tts latency
             transport.output(),          # Out to Speaker
             context_aggregator.assistant(), # Log Bot Text
         ]
