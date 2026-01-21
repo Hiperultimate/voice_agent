@@ -75,7 +75,8 @@ class UserRecorder(FrameProcessor):
                     self.data.turns.append({
                         "role": "user",
                         "text": full_text,
-                        "timestamp": self._start_time or now
+                        "start": self._start_time or now,
+                        "end" : now
                     })
             self._user_buffer = []
 
@@ -108,7 +109,8 @@ class BotRecorder(FrameProcessor):
                     self.data.turns.append({
                         "role": "bot",
                         "text": full_text,
-                        "timestamp": self._start_time or now
+                        "start": self._start_time or now,
+                        "end": now
                     })
             self._bot_buffer = []
 
