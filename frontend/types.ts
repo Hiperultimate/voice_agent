@@ -5,6 +5,12 @@ export type SessionStateProps = {
     setSessionId: Dispatch<SetStateAction<string | null>>;
 }
 
+export type SessionData = {
+  session_id: string;
+  start_time: number;
+  turns: BackendTurn[];
+}
+
 export type ActiveCallProps = {
     sessionId: string | null;
     setSessionId: (id: string) => void;

@@ -37,9 +37,11 @@ class SessionData:
         self.session_id = session_id
         self.turns = []
 
-        self.t1_user_stop = 0.0      # When did VAD say "Silence"?
-        self.t2_transcript = 0.0     # When did STT give us text?
-        self.t3_llm_start = 0.0      # When did LLM give first token?
+        self.start_time = time.time() 
+
+        self.t1_user_stop = 0.0     
+        self.t2_transcript = 0.0     
+        self.t3_llm_start = 0.0      
 
     def save_json(self):
         # later on we can change this code to save transcription inside a DB as jsonb or as blob in s3
@@ -47,7 +49,11 @@ class SessionData:
         file_path = f"data/{self.session_id}.json"
         try:
             with open(file_path, "w") as f:
-                json.dump({"session_id": self.session_id, "turns": self.turns}, f, indent=2)
+                json.dump({
+                    "session_id": self.session_id,
+                    "start_time": self.start_time, 
+                    "turns": self.turns
+                    }, f, indent=2 )
             logger.info(f"Transcript saved to {file_path}")
         except Exception as e:
             logger.error(f"Failed to save JSON: {e}")
@@ -227,7 +233,7 @@ async def run_bot(websocket_client, session_id):
     audiobuffer = AudioBufferProcessor(
         num_channels=1,               # 1 for mono, 2 for stereo (user left, bot right)
         enable_turn_audio=False,      # Enable per-turn audio recording
-        user_continuous_stream=True,  # User has continuous audio stream
+        user_continuous_stream=False,  # User has continuous audio stream
     )
 
     session_data = SessionData(session_id)

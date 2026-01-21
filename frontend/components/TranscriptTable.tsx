@@ -3,11 +3,12 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { User, Bot, Loader2 } from 'lucide-react';
-import { BackendTurn, SessionStateProps } from '@/types';
+import { BackendTurn, SessionData, SessionStateProps } from '@/types';
 import { formatTime } from '@/helperFns/formatTime';
+import { isNull } from 'node:util';
 
 export default function TranscriptTable({ sessionId }: SessionStateProps) {
-  const [turns, setTurns] = useState<BackendTurn[]>([]);
+  const [data, setData] = useState<SessionData | null>(null);
   const [status, setStatus] = useState<'loading' | 'error' | 'success'>('loading');
 
   // Polling for transcript
@@ -21,7 +22,7 @@ export default function TranscriptTable({ sessionId }: SessionStateProps) {
     const fetchTranscript = async () => {
       try {
         const res = await axios.get(`http://localhost:8000/session/${sessionId}/data`);
-        setTurns(res.data.turns || []);
+        setData(res.data || null);
         setStatus('success');
       } catch (err) {
         attempts++;
@@ -40,7 +41,8 @@ export default function TranscriptTable({ sessionId }: SessionStateProps) {
   }, [sessionId]);
 
   // Calculate the Session Start Time (First turn timestamp)
-  const sessionStartTime = turns.length > 0 ? turns[0].start : 0;
+  const turns = data?.turns || [];
+  const sessionStart = data?.start_time || 0;
 
   if (status === 'loading') return <div className="text-center p-4"><Loader2 className="animate-spin inline mr-2"/>Generating transcript...</div>;
   if (status === 'error') return <div className="text-center p-4 text-red-500">Transcript not found.</div>;
@@ -52,8 +54,8 @@ export default function TranscriptTable({ sessionId }: SessionStateProps) {
         {turns.map((turn, index) => {
           
           // Calculate Relative Time
-          const relativeStart = turn.start - sessionStartTime;
-          const relativeEnd = turn.end > 0 ? (turn.end - sessionStartTime) : relativeStart;
+          const relativeStart = Math.max(0, turn.start - sessionStart);
+          const relativeEnd = turn.end > 0 ? Math.max(0, turn.end - sessionStart) : 0;
 
           if (turn.role === 'latency') {
              return (
