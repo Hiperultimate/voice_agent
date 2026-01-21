@@ -12,6 +12,7 @@ from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -37,6 +38,7 @@ async def run_bot(websocket_client, session_id):
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(),
             vad_audio_passthrough=True,
+            serializer=ProtobufFrameSerializer(),
         ),
     )
 
@@ -44,7 +46,6 @@ async def run_bot(websocket_client, session_id):
     
     llm = GoogleLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
-        model="gemini-1.5-flash"
     )
     
     tts = CartesiaTTSService(

@@ -1,7 +1,9 @@
+import ActiveCall from '@/components/ActiveCall';
+
 export default function Home() {
   return (
-    <div>
-      <h1>Welcome</h1>
-    </div>
+    <main className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
+      <ActiveCall />
+    </main>
   );
 }
