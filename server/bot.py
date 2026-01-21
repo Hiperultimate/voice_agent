@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import wave
 
 # Pipecat imports
 from pipecat.pipeline.pipeline import Pipeline
@@ -16,6 +17,7 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -221,6 +223,13 @@ async def run_bot(websocket_client, session_id):
     ]
     context = LLMContext(messages)
     context_aggregator = LLMContextAggregatorPair(context)
+    
+    audiobuffer = AudioBufferProcessor(
+        num_channels=1,               # 1 for mono, 2 for stereo (user left, bot right)
+        enable_turn_audio=False,      # Enable per-turn audio recording
+        user_continuous_stream=True,  # User has continuous audio stream
+    )
+
     session_data = SessionData(session_id)
     user_recorder = UserRecorder(session_data)
     bot_recorder = BotRecorder(session_data)
@@ -237,6 +246,7 @@ async def run_bot(websocket_client, session_id):
             tts,                         # Text -> Audio
             tts_recorder,                # tts latency
             transport.output(),          # Out to Speaker
+            audiobuffer,                 # Recorder
             context_aggregator.assistant(), # Log Bot Text
         ]
     )
@@ -247,6 +257,20 @@ async def run_bot(websocket_client, session_id):
             allow_interruptions=True,
         ),
     )
+
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(transport, client):
+        logger.info(f"Client connected")
+        await audiobuffer.start_recording()
+    
+    @audiobuffer.event_handler("on_audio_data")
+    async def on_audio_data(buffer, audio_bytes, sample_rate, num_channels):
+        with wave.open(f"data/{session_id}.wav", "wb") as wf:
+            wf.setnchannels(num_channels)
+            wf.setsampwidth(2)           # 16-bit PCM
+            wf.setframerate(sample_rate)
+            wf.writeframes(audio_bytes)
+
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
