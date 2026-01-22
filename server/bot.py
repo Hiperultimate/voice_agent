@@ -327,6 +327,7 @@ async def run_bot(websocket_client, session_id):
     
     @audiobuffer.event_handler("on_audio_data")
     async def on_audio_data(buffer, audio_bytes, sample_rate, num_channels):
+        os.makedirs("data", exist_ok=True)
         with wave.open(f"data/{session_id}.wav", "wb") as wf:
             wf.setnchannels(num_channels)
             wf.setsampwidth(2)           # 16-bit PCM
