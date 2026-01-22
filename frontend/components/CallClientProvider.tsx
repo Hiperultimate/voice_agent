@@ -31,7 +31,7 @@ export default function CallClientProvider() {
         <>
           <SessionPlayer
             sessionId={sessionId}
-            setSessionId={setSessionId} // Pass props if your interface requires it
+            setSessionId={setSessionId}
           />
           <TranscriptTable sessionId={sessionId} setSessionId={setSessionId} />
         </>

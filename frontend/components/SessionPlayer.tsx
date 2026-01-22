@@ -15,12 +15,13 @@ export default function SessionPlayer({ sessionId }: SessionStateProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
+  // Polling audio files
   useEffect(() => {
     if (!sessionId || !containerRef.current) return
 
     let mounted = true
     let attempts = 0
-    const maxAttempts = 30 // Increased to 30 seconds for safety
+    const maxAttempts = 15 
     let retryTimer: NodeJS.Timeout
 
     const init = async () => {
@@ -32,21 +33,21 @@ export default function SessionPlayer({ sessionId }: SessionStateProps) {
 
         console.log(`Polling session data... Attempt ${attempts + 1}`)
 
-        // 1. Fetch JSON Data
+        // fetch JSON Data
         const dataRes = await axios.get(dataUrl)
         
-        // 2. Check Audio Existence (Using GET instead of HEAD for stability)
+        // check Audio Existence (Using GET instead of HEAD for stability)
         // We catch the error specifically for this request to allow retrying
         await axios.get(audioUrl, { params: { t: cacheBuster } })
 
         if (!mounted) return
 
-        // 3. Cleanup previous instance
+        // cleanup previous instance
         if (wavesurferRef.current) {
           wavesurferRef.current.destroy()
         }
 
-        // 4. Create WaveSurfer
+        // create WaveSurfer
         const ws = WaveSurfer.create({
           container: containerRef.current!,
           waveColor: '#E5E7EB',
@@ -57,8 +58,8 @@ export default function SessionPlayer({ sessionId }: SessionStateProps) {
           barGap: 1,
           normalize: true,
           backend: 'MediaElement', // Key for streaming
-          minPxPerSec: 100, // 1 second = 100px wide. Makes it scrollable.
-          autoScroll: true, // Follow the cursor
+          minPxPerSec: 100, 
+          autoScroll: true,
           fillParent: true,
         })
 
@@ -78,7 +79,7 @@ export default function SessionPlayer({ sessionId }: SessionStateProps) {
           })
         )
 
-        // 6. Draw Regions 
+        // draw Regions 
         const { turns, audio_start_time } = dataRes.data
         const audioStart = audio_start_time ?? 0
 
@@ -105,6 +106,20 @@ export default function SessionPlayer({ sessionId }: SessionStateProps) {
                     turn.role === 'user'
                       ? 'rgba(59,130,246,0.2)'
                       : 'rgba(34,197,94,0.2)',
+                })
+              }
+            }
+
+            if (turn.role === 'freeze' && turn.end > turn.start) {
+              const end = Math.min(turn.end - audioStart, duration)
+              if (end > start) {
+                regions.addRegion({
+                  start,
+                  end,
+                  drag: false,
+                  resize: false,
+                  color: 'rgba(239, 68, 68, 0.5)', 
+                  content: 'FROZEN',
                 })
               }
             }
@@ -139,7 +154,6 @@ export default function SessionPlayer({ sessionId }: SessionStateProps) {
             // If audio decode fails, we might want to retry init or just log
         })
 
-        // 7. Load Audio
         ws.load(audioUrl)
         wavesurferRef.current = ws
 
@@ -172,7 +186,6 @@ export default function SessionPlayer({ sessionId }: SessionStateProps) {
     setIsPlaying((p) => !p)
   }
 
-  // --- RENDER ---
 
   if (!sessionId) return null
 
@@ -234,6 +247,9 @@ export default function SessionPlayer({ sessionId }: SessionStateProps) {
         </div>
         <div className="flex items-center gap-2 text-xs font-medium text-gray-600">
           <span className="w-3 h-3 bg-green-100 border border-green-300 rounded-sm" /> Bot
+        </div>
+        <div className="flex items-center gap-2 text-xs font-medium text-red-600">
+          <span className="w-3 h-3 bg-red-100 border border-red-300 rounded-sm" /> Freeze
         </div>
       </div>
     </div>

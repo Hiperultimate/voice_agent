@@ -11,7 +11,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.frames.frames import (Frame, TranscriptionFrame, TextFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame)
+from pipecat.frames.frames import (Frame, TranscriptionFrame, AudioRawFrame, TextFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame)
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.llm import GoogleLLMService
@@ -30,6 +30,8 @@ load_dotenv()
 
 logger.remove()
 logger.add(sys.stderr, level="DEBUG")
+
+active_freeze_processors = {}
 
 class SessionData:
     """Holds the data shared between the UserRecorder and BotRecorder."""
@@ -59,6 +61,52 @@ class SessionData:
             logger.info(f"Transcript saved to {file_path}")
         except Exception as e:
             logger.error(f"Failed to save JSON: {e}")
+
+class FreezeProcessor(FrameProcessor):
+    def __init__(self, data: 'SessionData'):
+        super().__init__()
+        self.data = data
+        self._is_frozen = False
+        self._freeze_start_time = 0
+
+    def set_frozen(self, frozen: bool):
+        now = time.time()
+        if self._is_frozen == frozen:
+            return
+
+        self._is_frozen = frozen
+        
+        if frozen:
+            self._freeze_start_time = now
+            logger.warning("Bot Freeze: Audio output is now blocked.")
+        else:
+            logger.warning("Bot Unfreeze: Audio output restored.")
+            if self._freeze_start_time > 0:
+                # saving freeze to showcase it on the frontend
+                self.data.turns.append({
+                    "role": "freeze",
+                    "start": self._freeze_start_time,
+                    "end": now,
+                    "metadata": {"text": "Bot Frozen"}
+                })
+                self._freeze_start_time = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        # auto unfreeze logic when user starts talking
+        if isinstance(frame, UserStartedSpeakingFrame):
+            if self._is_frozen:
+                logger.info("User speech detected. Automatically unfreezing bot.")
+                self.set_frozen(False)
+
+        # blocking audio frames directly
+        if self._is_frozen and isinstance(frame, AudioRawFrame):
+            if direction == FrameDirection.DOWNSTREAM:
+                return # Drop the audio frame
+
+        # push all other frames forward
+        await self.push_frame(frame, direction)
 
 class UserRecorder(FrameProcessor):
     def __init__(self, data: SessionData):
@@ -243,6 +291,9 @@ async def run_bot(websocket_client, session_id):
     user_recorder = UserRecorder(session_data)
     bot_recorder = BotRecorder(session_data)
     tts_recorder = TTSRecorder(session_data)
+    freeze_processor = FreezeProcessor(session_data)
+
+    active_freeze_processors[session_id] = freeze_processor
 
     pipeline = Pipeline(
         [
@@ -254,6 +305,7 @@ async def run_bot(websocket_client, session_id):
             bot_recorder,                # Saves bot tts text
             tts,                         # Text -> Audio
             tts_recorder,                # tts latency
+            freeze_processor,            # Freezing TTS logic
             transport.output(),          # Out to Speaker
             audiobuffer,                 # Recorder
             context_aggregator.assistant(), # Log Bot Text

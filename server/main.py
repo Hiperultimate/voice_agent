@@ -1,7 +1,7 @@
 import uuid
 import logging
 import os
-from bot import run_bot
+from bot import run_bot, active_freeze_processors
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +51,16 @@ async def get_audio(session_id: str):
     if os.path.exists(file_path):
         return FileResponse(file_path, media_type="audio/wav")
     return {"error": "Audio file not found"}, 404
+
+@app.post("/session/{session_id}/freeze")
+async def toggle_freeze(session_id: str, frozen: bool):
+    processor = active_freeze_processors.get(session_id)
+    
+    if not processor:
+        return {"error": "Session not found or not active"}, 404
+
+    processor.set_frozen(frozen)
+    return {"status": "success", "session_id": session_id, "is_frozen": frozen}
 
 
 @app.websocket("/ws/{session_id}")
