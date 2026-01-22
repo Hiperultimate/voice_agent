@@ -2,6 +2,10 @@ import uuid
 import logging
 import os
 from bot import run_bot, active_freeze_processors
+from contextlib import asynccontextmanager
+import asyncio
+import uvicorn
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Voice Agent WS Server")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handles FastAPI startup and shutdown."""
+    yield  # Run app
+
+app = FastAPI(title="Voice Agent WS Server", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,7 +96,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             del active_sessions[session_id]
         logger.info(f"Session closed: {session_id}")
 
+async def main():
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+    server = uvicorn.Server(config)
+    
+    try:
+        await asyncio.gather(server.serve())
+    except asyncio.CancelledError:
+        print("Server tasks cancelled.")
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    asyncio.run(main())

@@ -260,14 +260,14 @@ async def run_bot(websocket_client, session_id):
         ),
     )
 
-    stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
+    stt = DeepgramSTTService(api_key=os.environ["DEEPGRAM_API_KEY"])
     
     llm = GoogleLLMService(
-        api_key=os.getenv("GOOGLE_API_KEY"),
+        api_key=os.environ["GOOGLE_API_KEY"],
     )
     
     tts = CartesiaTTSService(
-        api_key=os.getenv("CARTESIA_API_KEY"),
+        api_key=os.environ["CARTESIA_API_KEY"],
         voice_id="5ee9feff-1265-424a-9d7f-8e4d431a12c7", 
     )
 
@@ -284,7 +284,7 @@ async def run_bot(websocket_client, session_id):
         num_channels=1,               # 1 for mono, 2 for stereo (user left, bot right)
         enable_turn_audio=False,      # Enable per-turn audio recording
         user_continuous_stream=False,  # User has continuous audio stream
-        buffer_size=5 * 1024 * 1024
+        sample_rate=16000, 
     )
 
     session_data = SessionData(session_id)
@@ -340,7 +340,7 @@ async def run_bot(websocket_client, session_id):
         logger.info(f"Client disconnected session {session_id}. Killing pipeline.")
         await task.cancel()
 
-    runner = PipelineRunner()
+    runner = PipelineRunner(handle_sigint=False)
 
     try:
         await runner.run(task)
