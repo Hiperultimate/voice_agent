@@ -3,7 +3,22 @@
 ### 1. Implementation Approach
 The application is built using a decoupled Fullstack architecture:
 *   **Backend (Python/FastAPI):** Built on the **Pipecat** framework using a modular pipeline.
-    *   **Latency Tracking:** I used a custom "Shared Whiteboard" pattern (`SessionData`). By placing specific `FrameProcessors` at different stages (STT, LLM, TTS), I captured 4 precise timestamps (T1-T4) to calculate STT processing time, LLM Time-to-First-Token, and TTS playback latency.
+* **Latency Tracking:** I used a custom pattern to explicitly track timing across the pipeline. By placing lightweight `FrameProcessors` at key boundaries, I captured four wall-clock timestamps:
+    * **T1:** `UserStoppedSpeakingFrame` (user finished speaking)
+    * **T2:** `TranscriptionFrame` (final STT text available)
+    * **T3:** First `TextFrame` from the LLM (time-to-first-token)
+    * **T4:** `BotStartedSpeakingFrame` (actual audio playback start)  
+    From these timestamps, the following latencies are derived:
+
+        - **STT latency** = T2 − T1  
+        - **LLM latency (TTFT)** = T3 − T2  
+        - **TTS latency** = T4 − T3  
+
+    This makes each stage of the pipeline observable and allows precise alignment between transcript, latency regions, and recorded audio in the frontend waveform.
+
+*   **Freeze Simulation:** I implemented a `FreezeProcessor` sitting before the output transport. It uses a "Frame Dropping" strategy: when frozen, it stops the audio packets from reaching the user.
+*   **Data Sync:** To make sure the transcript matches the audio player, I captured an `audio_start_time` anchor. Since the JSON uses Unix timestamps, the frontend uses this anchor to "reset" the clock to 0.0s so the labels line up perfectly with the audio.
+
     *   **Freeze Simulation:** I implemented a `FreezeProcessor` sitting before the output transport. It uses a "Frame Dropping" strategy: when frozen, it stops the audio packets from reaching the user.
     *   **Data Sync:** To make sure the transcript matches the audio player, I captured an `audio_start_time` anchor. Since the JSON uses Unix timestamps, the frontend uses this anchor to "reset" the clock to 0.0s so the labels line up perfectly with the audio.
 
@@ -30,20 +45,9 @@ The application is built using a decoupled Fullstack architecture:
 *   **WebRTC Integration:** Switching from WebSockets to WebRTC. WebRTC is built for real-time media and handles internet "hiccups" better, which would make the voice feel even more natural and reduce the "robotic" lag. May fix some latency issues as well.
 *   **Stereo Audio:** Recording the user on the left side and the bot on the right side. This makes it much easier to see exactly when someone was interrupted during a review.
 *   **Decoupled Media Recording Service:** To fully resolve the synchronization and "Fast-Forwarding" issues during freezes, I would transition to a dedicated Media Recording Service. Instead of recording within the Pipecat pipeline (where processing lag affects the file), the pipeline would stream audio to an external recorder. This recorder would use an independent wall-clock to detect gaps in the incoming stream and automatically inject "Digital Silence" in real-time. This decoupling ensures that the final `.wav` file duration perfectly matches the session wall-clock time, regardless of any internal AI pipeline delays or simulated freezes.
+* **Pipecat Turn Latency:** Pipecat provides a built-in turn latency observer that measures end-to-end conversational turn timing. For this implementation, I intentionally chose a custom latency-tracking approach to keep the system easier to reason about while learning the framework and debugging pipeline behavior.
+A future improvement would be to integrate Pipecat’s native turn latency observer and **compare its results against the custom stage-level metrics implemented here**. Depending on stability and accuracy under real streaming conditions, the system could either:
+    - Use the built-in observer for standardized turn metrics, or  
+    - Continue using custom timestamps for fine-grained, stage-specific visibility.
 
----
-
-### PR Message Summary:
-
-**Description:**
-Implemented a voice agent with Gemini LLM that features custom freeze simulation and detailed latency metrics.
-
-**Key Fixes & Research:**
-- **Pipeline Logic:** Researched and chose Raw Pipeline over RTVI for granular frame control.
-- **Clock Sync:** Handled the "Pipeline Delay" issue by optimizing processor placement to ensure audio and timestamps match.
-- **Simplified Latency:** Documented why STT latency is 0ms (Deepgram's speed vs. VAD silence detection).
-- **Freeze Behavior:** Implemented a stable "Frame Drop" freeze after discovering that manual byte manipulation in the raw pipeline leads to transport instability (Issue #3150).
-
-**Improvements noted:**
-- Current freeze implementation causes audio "fast-forwarding" in the recording; needs further Pipecat clock-sync investigation.
-- Suggested a multi-recorder setup to further eliminate processing lag from the final WAV file.
+    The final choice would depend on whether detailed per-stage insight or framework-level consistency is more valuable for the product.
