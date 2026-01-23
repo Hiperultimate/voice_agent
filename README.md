@@ -3,24 +3,22 @@
 ### 1. Implementation Approach
 The application is built using a decoupled Fullstack architecture:
 *   **Backend (Python/FastAPI):** Built on the **Pipecat** framework using a modular pipeline.
-* **Latency Tracking:** I used a custom pattern to explicitly track timing across the pipeline. By placing lightweight `FrameProcessors` at key boundaries, I captured four wall-clock timestamps:
-    * **T1:** `UserStoppedSpeakingFrame` (user finished speaking)
-    * **T2:** `TranscriptionFrame` (final STT text available)
-    * **T3:** First `TextFrame` from the LLM (time-to-first-token)
-    * **T4:** `BotStartedSpeakingFrame` (actual audio playback start)  
-    From these timestamps, the following latencies are derived:
+    * **Latency Tracking:** I used a custom pattern to explicitly track timing across the pipeline. By placing lightweight `FrameProcessors` at key boundaries, I captured four wall-clock timestamps:
+        * **T1:** `UserStoppedSpeakingFrame` (user finished speaking)
+        * **T2:** `TranscriptionFrame` (final STT text available)
+        * **T3:** First `TextFrame` from the LLM (time-to-first-token)
+        * **T4:** `BotStartedSpeakingFrame` (actual audio playback start)  
+        From these timestamps, the following latencies are derived:
 
-        - **STT latency** = T2 − T1  
-        - **LLM latency (TTFT)** = T3 − T2  
-        - **TTS latency** = T4 − T3  
+            - **STT latency** = T2 − T1  
+            - **LLM latency (TTFT)** = T3 − T2  
+            - **TTS latency** = T4 − T3  
 
-    This makes each stage of the pipeline observable and allows precise alignment between transcript, latency regions, and recorded audio in the frontend waveform.
-
-*   **Freeze Simulation:** I implemented a `FreezeProcessor` sitting before the output transport. It uses a "Frame Dropping" strategy: when frozen, it stops the audio packets from reaching the user.
-*   **Data Sync:** To make sure the transcript matches the audio player, I captured an `audio_start_time` anchor. Since the JSON uses Unix timestamps, the frontend uses this anchor to "reset" the clock to 0.0s so the labels line up perfectly with the audio.
+        This makes each stage of the pipeline observable and allows precise alignment between transcript, latency regions, and recorded audio in the frontend waveform.
 
     *   **Freeze Simulation:** I implemented a `FreezeProcessor` sitting before the output transport. It uses a "Frame Dropping" strategy: when frozen, it stops the audio packets from reaching the user.
     *   **Data Sync:** To make sure the transcript matches the audio player, I captured an `audio_start_time` anchor. Since the JSON uses Unix timestamps, the frontend uses this anchor to "reset" the clock to 0.0s so the labels line up perfectly with the audio.
+
 
 *   **Frontend (Next.js/TS):** 
     *   **Interaction:** Used the `@pipecat-ai/client-js` SDK to handle the microphone and speaker.
@@ -37,7 +35,7 @@ The application is built using a decoupled Fullstack architecture:
     *   *What I tried:* I tried to "Mute" the bot by sending silent data so the recording stayed the same length. 
     *   *What happened:* This caused bugs in the audio transport. 
     *   *Final Decision:* I chose to "Drop" the frames instead. This keeps the system stable, even though it causes a "fast-forward" effect in the final recording where the frozen time is skipped.
-*   **Local File Storage:** Used local `.wav` and `.json` files. *Trade-off:* Simplifies the assignment for a 2-day timeline while avoiding the overhead of setting up S3 or a database, while remaining easy to swap for a cloud provider in the future.
+*   **Local File Storage:** Used local `.wav` for audio and `.json` files for timeline. *Trade-off:* Simplifies the assignment for a 2-day timeline while avoiding the overhead of setting up S3 or a database, while remaining easy to swap for a cloud provider in the future.
 
 ### 4. Future Improvements
 *   **Fixing the "Fast-Forward" Freeze:** As discussed in Pipecat Issue #3150, preventing the audio from skipping during a freeze requires deep investigation into the framework's clock-sync logic. A future version would use a "Silent Frame Generator" to keep time moving without breaking the transport.
